@@ -1,19 +1,30 @@
 import TodoItem from "./TodoItem";
 import type { Todo } from "@/db/todos";
 import { getDueStatus } from "@/lib/date";
-import { EMPTY_MESSAGE, type FilterKey } from "@/lib/filters";
+import { EMPTY_MESSAGE } from "@/lib/filters";
+import { categoryLabel } from "@/lib/categories";
+import type { ListParams } from "@/lib/query";
+
+/** 왜 비었는지 상황에 맞게 알려준다 (검색·카테고리가 걸려 있으면 그것부터) */
+function emptyMessage(params: ListParams): string {
+  if (params.q) return `"${params.q}" 에 해당하는 할 일이 없습니다.`;
+  if (params.category) {
+    return `'${categoryLabel(params.category)}' 카테고리에 해당하는 할 일이 없습니다.`;
+  }
+  return EMPTY_MESSAGE[params.filter];
+}
 
 export default function TodoList({
   todos,
-  filter,
+  params,
 }: {
   todos: Todo[];
-  filter: FilterKey;
+  params: ListParams;
 }) {
   if (todos.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-sm text-muted">
-        {EMPTY_MESSAGE[filter]}
+        {emptyMessage(params)}
       </p>
     );
   }

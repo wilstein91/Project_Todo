@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 /**
  * 마감일(선택) + 마감 시간(선택, 10분 단위) 입력.
@@ -11,23 +11,34 @@ import { useRef, useState } from "react";
  * step={600} 은 초 단위라 10분을 뜻한다. 다만 직접 타이핑하면
  * 10분 단위를 벗어난 값도 들어올 수 있어 서버에서 다시 검사한다.
  *
- * 추가에 성공하면 부모가 key 를 바꿔 이 컴포넌트를 다시 마운트한다.
- * 그러면 잠금 상태가 자연스럽게 초기화되므로 effect 로 되돌릴 필요가 없다.
+ * 추가 폼과 수정 폼에서 함께 쓰이므로 id 는 useId 로 만든다.
+ * (한 화면에 여러 개가 떠도 label 연결이 어긋나지 않게)
  */
-export default function DueDateInput() {
-  const [hasDate, setHasDate] = useState(false);
+export default function DueDateInput({
+  defaultDate = "",
+  defaultTime = "",
+}: {
+  defaultDate?: string | null;
+  defaultTime?: string | null;
+}) {
+  const uid = useId();
+  const dateId = `${uid}-due-date`;
+  const timeId = `${uid}-due-time`;
+
+  const [hasDate, setHasDate] = useState(Boolean(defaultDate));
   const timeRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      <label htmlFor="due_date" className="text-sm text-muted">
+    <div className="flex flex-wrap items-center gap-2">
+      <label htmlFor={dateId} className="text-sm text-muted">
         마감
       </label>
 
       <input
-        id="due_date"
+        id={dateId}
         name="due_date"
         type="date"
+        defaultValue={defaultDate ?? ""}
         onChange={(e) => {
           const filled = Boolean(e.target.value);
           setHasDate(filled);
@@ -37,22 +48,25 @@ export default function DueDateInput() {
         className="rounded-lg border border-line bg-background px-2.5 py-1.5 text-sm outline-none focus:border-blue-500"
       />
 
-      <label htmlFor="due_time" className="sr-only">
+      <label htmlFor={timeId} className="sr-only">
         마감 시간
       </label>
       <input
         ref={timeRef}
-        id="due_time"
+        id={timeId}
         name="due_time"
         type="time"
         step={600}
+        defaultValue={defaultTime ?? ""}
         disabled={!hasDate}
         title="10분 단위로 입력할 수 있습니다"
         className="rounded-lg border border-line bg-background px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 disabled:opacity-40"
       />
 
       <span className="text-xs text-muted">
-        {hasDate ? "시간은 10분 단위 (선택)" : "날짜를 고르면 시간도 넣을 수 있습니다"}
+        {hasDate
+          ? "시간은 10분 단위 (선택)"
+          : "날짜를 고르면 시간도 넣을 수 있습니다"}
       </span>
     </div>
   );
