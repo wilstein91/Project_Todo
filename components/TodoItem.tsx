@@ -7,6 +7,7 @@ import type { DueStatus } from "@/lib/date";
 import CategoryBadge from "./CategoryBadge";
 import DueBadge from "./DueBadge";
 import TodoEditForm from "./TodoEditForm";
+import { useUndoToast } from "./UndoToast";
 
 /** 마감이 급한 항목은 테두리로도 드러낸다 */
 const BORDER_STYLE: Record<string, string> = {
@@ -24,6 +25,7 @@ export default function TodoItem({
 }) {
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
+  const { showUndo } = useUndoToast();
 
   if (editing) {
     return (
@@ -86,7 +88,12 @@ export default function TodoItem({
           type="button"
           disabled={pending}
           aria-label={`"${todo.title}" 삭제`}
-          onClick={() => startTransition(() => deleteTodoAction(todo.id))}
+          onClick={() =>
+            startTransition(async () => {
+              const { deleted } = await deleteTodoAction(todo.id);
+              if (deleted) showUndo(deleted);
+            })
+          }
           className="rounded-md px-2 py-1 text-sm text-muted transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950"
         >
           삭제

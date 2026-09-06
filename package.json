@@ -6,10 +6,15 @@
     "dev": "next dev -p 3100",
     "build": "next build",
     "start": "next start -p 3100",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:seed-admin": "node --env-file=.env --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/seed-admin.mjs",
+    "gen:secret": "node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"",
+    "db:seed-sample": "node --env-file=.env --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/seed-sample.mjs"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
+    "jose": "^6.2.12",
     "next": "16.3.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"

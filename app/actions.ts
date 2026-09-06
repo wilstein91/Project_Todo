@@ -2,8 +2,10 @@
 
 import { refresh } from "next/cache";
 import * as todos from "@/db/todos";
+import type { Todo } from "@/db/todos";
 import type { CreateState } from "@/lib/form-state";
 import { parseId, parseTodoForm } from "@/lib/todo-input";
+import { getCurrentUser } from "@/lib/dal";
 
 /**
  * 할 일 추가. useActionState 와 함께 쓰므로 첫 인자가 이전 상태다.
@@ -18,7 +20,8 @@ export async function createTodoAction(
     return { ok: false, error: parsed.error, submitCount: prev.submitCount };
   }
 
-  todos.createTodo(parsed.value);
+  const user = await getCurrentUser();
+  todos.createTodo(user.id, parsed.value);
   refresh();
 
   return { ok: true, error: null, submitCount: prev.submitCount + 1 };
@@ -39,7 +42,8 @@ export async function updateTodoAction(
   const parsed = parseTodoForm(formData);
   if (!parsed.ok) return { error: parsed.error };
 
-  if (!todos.updateTodo(id, parsed.value)) {
+  const user = await getCurrentUser();
+  if (!todos.updateTodo(id, user.id, parsed.value)) {
     return { error: "항목을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다." };
   }
 
@@ -47,14 +51,38 @@ export async function updateTodoAction(
   return { error: null };
 }
 
+/**
+ * 아래 두 동작은 id 만 받으므로, 로그인한 사람의 것이 맞는지
+ * DB 조건(user_id)으로 함께 확인한다. 남의 항목 id 를 넣어도 아무 일도 일어나지 않는다.
+ */
 export async function toggleTodoAction(id: number): Promise<void> {
   if (!Number.isInteger(id)) throw new Error("잘못된 id");
-  todos.toggleTodo(id);
+  const user = await getCurrentUser();
+  todos.toggleTodo(id, user.id);
   refresh();
 }
 
-export async function deleteTodoAction(id: number): Promise<void> {
+/**
+ * 삭제. 되돌리기를 위해 지워진 내용을 그대로 돌려준다.
+ * 화면은 이 값을 잠시 들고 있다가 '되돌리기' 를 누르면 restore 로 넘긴다.
+ */
+export async function deleteTodoAction(
+  id: number,
+): Promise<{ deleted: Todo | null }> {
   if (!Number.isInteger(id)) throw new Error("잘못된 id");
-  todos.deleteTodo(id);
+  const user = await getCurrentUser();
+
+  const target = todos.getTodo(id, user.id);
+  if (!target) return { deleted: null };
+
+  todos.deleteTodo(id, user.id);
+  refresh();
+  return { deleted: target };
+}
+
+export async function restoreTodoAction(todo: Todo): Promise<void> {
+  const user = await getCurrentUser();
+  // 넘어온 값을 그대로 믿지 않고, 저장은 항상 이 사용자 소유로 한다
+  todos.restoreTodo(user.id, todo);
   refresh();
 }

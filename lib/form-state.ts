@@ -17,3 +17,18 @@ export const initialCreateState: CreateState = {
   error: null,
   submitCount: 0,
 };
+
+/** 로그인·계정 생성처럼 오류 메시지만 필요한 폼의 공용 상태 */
+export type FormState = {
+  ok: boolean;
+  error: string | null;
+  message: string | null;
+  submitCount: number;
+};
+
+export const initialFormState: FormState = {
+  ok: false,
+  error: null,
+  message: null,
+  submitCount: 0,
+};

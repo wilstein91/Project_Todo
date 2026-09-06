@@ -1,5 +1,11 @@
 import { getDb } from "./client";
-import { addDays, nowIso, nowTimeLocal, todayLocal } from "@/lib/date";
+import {
+  addDays,
+  monthRange,
+  nowIso,
+  nowTimeLocal,
+  todayLocal,
+} from "@/lib/date";
 import { DEFAULT_FILTER, type FilterKey } from "@/lib/filters";
 import type { CategoryCode } from "@/lib/categories";
 import type { TodoInput } from "@/lib/todo-input";
@@ -40,6 +46,8 @@ const ORDER_BY = `
 
 /** 목록을 좁히는 조건들 */
 export type ListQuery = {
+  /** 반드시 지정한다. 다른 사람의 할 일이 섞이지 않게 하는 기준이다. */
+  userId: number;
   filter?: FilterKey;
   /** null 이면 카테고리 제한 없음 */
   category?: CategoryCode | null;
@@ -93,9 +101,13 @@ function statusCondition(filter: FilterKey): { sql: string; bind: Bind } {
 }
 
 /** 카테고리·검색어 조건 (필터 탭과 무관하게 함께 적용된다) */
-function scopeConditions(query: ListQuery): { sql: string[]; bind: Bind } {
-  const sql: string[] = [];
-  const bind: Bind = {};
+function scopeConditions(query: ListQuery): {
+  sql: string[];
+  bind: Record<string, string | number>;
+} {
+  // 소유자 조건은 어떤 경우에도 빠지지 않는다
+  const sql: string[] = ["user_id = @userId"];
+  const bind: Record<string, string | number> = { userId: query.userId };
 
   if (query.category) {
     sql.push("category = @category");
@@ -118,18 +130,43 @@ function whereClause(parts: string[]): string {
   return kept.length > 0 ? `WHERE ${kept.join("\n            AND ")}` : "";
 }
 
-export function listTodos(query: ListQuery = {}): Todo[] {
+export function listTodos(query: ListQuery): Todo[] {
   const status = statusCondition(query.filter ?? DEFAULT_FILTER);
   const scope = scopeConditions(query);
 
   const where = whereClause([status.sql, ...scope.sql]);
   const bind = { ...status.bind, ...scope.bind };
 
-  const stmt = getDb().prepare(`SELECT * FROM todos ${where} ${ORDER_BY}`);
-  // better-sqlite3 는 바인딩할 값이 없을 때 빈 객체를 넘기면 오류가 난다
-  return (
-    Object.keys(bind).length > 0 ? stmt.all(bind) : stmt.all()
-  ) as Todo[];
+  // 값은 항상 파라미터로 넘긴다. 문자열을 이어 붙이면 SQL 인젝션이 생긴다.
+  return getDb()
+    .prepare(`SELECT * FROM todos ${where} ${ORDER_BY}`)
+    .all(bind) as Todo[];
+}
+
+/**
+ * 달력 보기용. 그 달에 마감이 있는 항목만 가져온다.
+ * 마감이 없는 항목은 달력에 놓을 자리가 없으므로 제외한다.
+ */
+export function listTodosByMonth(
+  query: Omit<ListQuery, "filter"> & { month: string },
+): Todo[] {
+  const { start, end } = monthRange(query.month);
+  const scope = scopeConditions(query);
+
+  const where = whereClause([
+    ...scope.sql,
+    "due_date IS NOT NULL",
+    "due_date >= @start",
+    "due_date <= @end",
+  ]);
+
+  return getDb()
+    .prepare(
+      `SELECT * FROM todos
+       ${where}
+       ORDER BY due_date ASC, due_time IS NULL, due_time ASC, id ASC`,
+    )
+    .all({ ...scope.bind, start, end }) as Todo[];
 }
 
 export type Counts = Record<FilterKey, number>;
@@ -140,7 +177,7 @@ export type Counts = Record<FilterKey, number>;
  * 카테고리·검색어는 반영하되 필터 탭 자체는 반영하지 않는다.
  * (검색 중이면 "그 검색 결과 안에서 이번 주가 몇 건인지"를 보여준다)
  */
-export function countTodos(query: Omit<ListQuery, "filter"> = {}): Counts {
+export function countTodos(query: Omit<ListQuery, "filter">): Counts {
   const today = todayLocal();
   const scope = scopeConditions(query);
   const where = whereClause(scope.sql);
@@ -185,20 +222,21 @@ export function countTodos(query: Omit<ListQuery, "filter"> = {}): Counts {
   };
 }
 
-export function getTodo(id: number): Todo | undefined {
-  return getDb().prepare("SELECT * FROM todos WHERE id = ?").get(id) as
-    | Todo
-    | undefined;
+export function getTodo(id: number, userId: number): Todo | undefined {
+  return getDb()
+    .prepare("SELECT * FROM todos WHERE id = ? AND user_id = ?")
+    .get(id, userId) as Todo | undefined;
 }
 
-export function createTodo(input: TodoInput): number {
+export function createTodo(userId: number, input: TodoInput): number {
   const now = nowIso();
   const result = getDb()
     .prepare(
-      `INSERT INTO todos (title, memo, due_date, due_time, category, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO todos (user_id, title, memo, due_date, due_time, category, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
+      userId,
       input.title,
       input.memo,
       input.dueDate,
@@ -211,7 +249,11 @@ export function createTodo(input: TodoInput): number {
 }
 
 /** 완료 여부는 체크박스로 따로 다루므로 여기서 건드리지 않는다. */
-export function updateTodo(id: number, input: TodoInput): boolean {
+export function updateTodo(
+  id: number,
+  userId: number,
+  input: TodoInput,
+): boolean {
   const changes = getDb()
     .prepare(
       `UPDATE todos
@@ -221,7 +263,7 @@ export function updateTodo(id: number, input: TodoInput): boolean {
            due_time   = ?,
            category   = ?,
            updated_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND user_id = ?`,
     )
     .run(
       input.title,
@@ -231,24 +273,56 @@ export function updateTodo(id: number, input: TodoInput): boolean {
       input.category,
       nowIso(),
       id,
+      userId,
     ).changes;
   return changes > 0;
 }
 
 /** 완료/미완료를 뒤집는다. 완료 시각(done_at)도 함께 관리한다. */
-export function toggleTodo(id: number): void {
+export function toggleTodo(id: number, userId: number): boolean {
   const now = nowIso();
-  getDb()
+  return getDb()
     .prepare(
       `UPDATE todos
        SET is_done    = CASE is_done WHEN 1 THEN 0 ELSE 1 END,
            done_at    = CASE is_done WHEN 1 THEN NULL ELSE ? END,
            updated_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND user_id = ?`,
     )
-    .run(now, now, id);
+    .run(now, now, id, userId).changes > 0;
 }
 
-export function deleteTodo(id: number): void {
-  getDb().prepare("DELETE FROM todos WHERE id = ?").run(id);
+/**
+ * 삭제를 되돌릴 때 쓴다. 원래의 생성 시각과 완료 상태까지 그대로 되살려
+ * 목록에서 있던 자리로 돌아가게 한다. (id 는 새로 발급된다)
+ */
+export function restoreTodo(userId: number, todo: Todo): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO todos
+         (user_id, title, memo, due_date, due_time, category,
+          is_done, done_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      userId,
+      todo.title,
+      todo.memo,
+      todo.due_date,
+      todo.due_time,
+      todo.category,
+      todo.is_done,
+      todo.done_at,
+      todo.created_at,
+      nowIso(),
+    );
+  return Number(result.lastInsertRowid);
+}
+
+export function deleteTodo(id: number, userId: number): boolean {
+  return (
+    getDb()
+      .prepare("DELETE FROM todos WHERE id = ? AND user_id = ?")
+      .run(id, userId).changes > 0
+  );
 }

@@ -32,7 +32,7 @@ function resolveDbPath(): string {
  *
  * 새 마이그레이션을 만들면 이 배열 끝에 파일명을 추가한다.
  */
-const MIGRATIONS = ["001_init.sql"] as const;
+const MIGRATIONS = ["001_init.sql", "002_users.sql"] as const;
 
 /** 아직 적용되지 않은 마이그레이션만 순서대로 실행한다. */
 function migrate(db: Database.Database): void {

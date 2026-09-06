@@ -149,3 +149,88 @@ export function getDueStatus(
   if (diff <= 7) return { kind: "week", label: `D-${diff}`, text };
   return { kind: "far", label: null, text };
 }
+
+/* ── 달력(월간 뷰)용 ────────────────────────────────────────── */
+
+export const WEEKDAY_LABELS = WEEKDAYS;
+
+/** Date 를 'YYYY-MM' 로 (로컬 기준) */
+export function monthKey(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+}
+
+/** 'YYYY-MM' 형식이며 실제로 존재하는 달인지 */
+export function isValidMonthStr(value: string): boolean {
+  if (!/^\d{4}-\d{2}$/.test(value)) return false;
+  const [, m] = value.split("-").map(Number);
+  return m >= 1 && m <= 12;
+}
+
+/** 'YYYY-MM' 에 개월을 더한다 (연도 넘김 처리 포함) */
+export function addMonths(monthStr: string, delta: number): string {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return monthKey(d);
+}
+
+/** '2026년 9월' */
+export function monthLabel(monthStr: string): string {
+  const [y, m] = monthStr.split("-").map(Number);
+  return `${y}년 ${m}월`;
+}
+
+/** 그 달의 첫날과 마지막날 ('YYYY-MM-DD') */
+export function monthRange(monthStr: string): { start: string; end: string } {
+  const [y, m] = monthStr.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0); // 다음 달 0일 = 이번 달 마지막 날
+  return { start: todayLocal(first), end: todayLocal(last) };
+}
+
+export type CalendarCell = {
+  date: string; // 'YYYY-MM-DD'
+  day: number; // 1~31
+  inMonth: boolean; // 이번 달인지 (앞뒤로 채운 날은 false)
+  isToday: boolean;
+  weekday: number; // 0=일 ~ 6=토
+};
+
+/**
+ * 달력 그리드를 만든다. 항상 일요일에서 시작해 토요일에 끝나도록
+ * 앞뒤를 이웃 달 날짜로 채운다. 반환값은 주 단위 배열이다.
+ */
+export function monthGrid(
+  monthStr: string,
+  now: Date = new Date(),
+): CalendarCell[][] {
+  const [y, m] = monthStr.split("-").map(Number);
+  const today = todayLocal(now);
+
+  const first = new Date(y, m - 1, 1);
+  // 첫 주의 일요일까지 거슬러 올라간다
+  const cursor = new Date(first);
+  cursor.setDate(cursor.getDate() - cursor.getDay());
+
+  const weeks: CalendarCell[][] = [];
+  // 6주면 어떤 달이든 다 담긴다. 마지막 주가 통째로 다음 달이면 뒤에서 잘라낸다.
+  for (let w = 0; w < 6; w++) {
+    const week: CalendarCell[] = [];
+    for (let d = 0; d < 7; d++) {
+      const date = todayLocal(cursor);
+      week.push({
+        date,
+        day: cursor.getDate(),
+        inMonth: cursor.getMonth() === m - 1 && cursor.getFullYear() === y,
+        isToday: date === today,
+        weekday: cursor.getDay(),
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    weeks.push(week);
+  }
+
+  while (weeks.length > 4 && weeks[weeks.length - 1].every((c) => !c.inMonth)) {
+    weeks.pop();
+  }
+  return weeks;
+}
