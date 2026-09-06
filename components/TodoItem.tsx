@@ -3,14 +3,30 @@
 import { useTransition } from "react";
 import { deleteTodoAction, toggleTodoAction } from "@/app/actions";
 import type { Todo } from "@/db/todos";
+import type { DueStatus } from "@/lib/date";
+import DueBadge from "./DueBadge";
 
-export default function TodoItem({ todo }: { todo: Todo }) {
+/** 마감이 급한 항목은 테두리로도 드러낸다 */
+const BORDER_STYLE: Record<string, string> = {
+  overdue: "border-red-300 dark:border-red-900",
+  today: "border-orange-300 dark:border-orange-900",
+  soon: "border-amber-300 dark:border-amber-900",
+};
+
+export default function TodoItem({
+  todo,
+  dueStatus,
+}: {
+  todo: Todo;
+  dueStatus: DueStatus;
+}) {
   const [pending, startTransition] = useTransition();
   const done = todo.is_done === 1;
+  const border = BORDER_STYLE[dueStatus.kind] ?? "border-line";
 
   return (
     <li
-      className={`flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 transition-opacity ${
+      className={`flex items-start gap-3 rounded-xl border bg-surface px-4 py-3 transition-opacity ${border} ${
         pending ? "opacity-40" : ""
       }`}
     >
@@ -31,6 +47,8 @@ export default function TodoItem({ todo }: { todo: Todo }) {
         >
           {todo.title}
         </p>
+        <DueBadge status={dueStatus} />
+
         {todo.memo && (
           <p className="mt-1 whitespace-pre-wrap break-words text-sm text-muted">
             {todo.memo}

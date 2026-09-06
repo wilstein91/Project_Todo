@@ -3,6 +3,7 @@
 import { refresh } from "next/cache";
 import * as todos from "@/db/todos";
 import type { CreateState } from "@/lib/form-state";
+import { isTenMinuteStep, isValidDateStr, isValidTimeStr } from "@/lib/date";
 
 const TITLE_MAX = 200;
 const MEMO_MAX = 2000;
@@ -29,7 +30,33 @@ export async function createTodoAction(
     return fail(`메모는 ${MEMO_MAX}자 이내로 입력해 주세요.`);
   }
 
-  todos.createTodo({ title, memo: memoRaw || null });
+  // 마감일 (선택)
+  const dueDateRaw = String(formData.get("due_date") ?? "").trim();
+  let dueDate: string | null = null;
+  if (dueDateRaw) {
+    if (!isValidDateStr(dueDateRaw)) {
+      return fail("마감일이 올바른 날짜가 아닙니다.");
+    }
+    dueDate = dueDateRaw;
+  }
+
+  // 마감 시간 (선택) — 브라우저 step 만 믿지 않고 서버에서 다시 검사한다
+  const dueTimeRaw = String(formData.get("due_time") ?? "").trim();
+  let dueTime: string | null = null;
+  if (dueTimeRaw) {
+    if (!dueDate) {
+      return fail("마감 시간을 넣으려면 마감일을 먼저 선택해 주세요.");
+    }
+    if (!isValidTimeStr(dueTimeRaw)) {
+      return fail("마감 시간이 올바른 시각이 아닙니다.");
+    }
+    if (!isTenMinuteStep(dueTimeRaw)) {
+      return fail("마감 시간은 10분 단위로 입력해 주세요. (예: 14:30)");
+    }
+    dueTime = dueTimeRaw;
+  }
+
+  todos.createTodo({ title, memo: memoRaw || null, dueDate, dueTime });
   refresh();
 
   return { ok: true, error: null, submitCount: prev.submitCount + 1 };

@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from "react";
 import { createTodoAction } from "@/app/actions";
 import { initialCreateState } from "@/lib/form-state";
+import DueDateInput from "./DueDateInput";
 
 export default function TodoForm() {
   const [state, formAction, pending] = useActionState(
@@ -57,6 +58,9 @@ export default function TodoForm() {
         placeholder="메모 (선택)"
         className="mt-2 w-full resize-y rounded-lg border border-line bg-background px-3 py-2 text-sm outline-none placeholder:text-muted focus:border-blue-500"
       />
+
+      {/* 추가 성공 시 key 가 바뀌어 다시 마운트되고, 마감일 입력이 초기화된다 */}
+      <DueDateInput key={state.submitCount} />
 
       {state.error && (
         <p id="title-error" role="alert" className="mt-2 text-sm text-red-600">

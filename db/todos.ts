@@ -1,5 +1,6 @@
 import { getDb } from "./client";
-import { nowIso } from "@/lib/date";
+import { addDays, nowIso, nowTimeLocal, todayLocal } from "@/lib/date";
+import { DEFAULT_FILTER, type FilterKey } from "@/lib/filters";
 import { DEFAULT_CATEGORY, type CategoryCode } from "@/lib/categories";
 
 export type Todo = {
@@ -36,34 +37,112 @@ const ORDER_BY = `
     id DESC
 `;
 
-export function listTodos(): Todo[] {
-  return getDb().prepare(`SELECT * FROM todos ${ORDER_BY}`).all() as Todo[];
+/** 필터별 WHERE 절과 바인딩 값. 기준 날짜/시각은 항상 로컬(KST)이다. */
+function buildWhere(filter: FilterKey): {
+  where: string;
+  params: Record<string, string>;
+} {
+  const today = todayLocal();
+
+  switch (filter) {
+    case "week":
+      // 오늘부터 7일 이내에 마감인 미완료 항목 (시간은 따지지 않는다)
+      return {
+        where: `WHERE is_done = 0
+                  AND due_date IS NOT NULL
+                  AND due_date >= @today
+                  AND due_date <= @weekEnd`,
+        params: { today, weekEnd: addDays(today, 7) },
+      };
+
+    case "overdue":
+      // 날짜가 지났거나, 오늘이면서 마감 시각이 이미 지난 미완료 항목
+      return {
+        where: `WHERE is_done = 0
+                  AND (due_date < @today
+                       OR (due_date = @today
+                           AND due_time IS NOT NULL
+                           AND due_time < @nowTime))`,
+        params: { today, nowTime: nowTimeLocal() },
+      };
+
+    case "done":
+      return { where: "WHERE is_done = 1", params: {} };
+
+    default:
+      return { where: "", params: {} };
+  }
 }
 
-export function countTodos(): { total: number; done: number } {
-  return getDb()
+export function listTodos(filter: FilterKey = DEFAULT_FILTER): Todo[] {
+  const { where, params } = buildWhere(filter);
+  const stmt = getDb().prepare(`SELECT * FROM todos ${where} ${ORDER_BY}`);
+  // better-sqlite3 는 바인딩할 값이 없을 때 빈 객체를 넘기면 오류가 난다
+  return (
+    Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()
+  ) as Todo[];
+}
+
+export type Counts = Record<FilterKey, number>;
+
+/** 탭에 표시할 건수를 한 번의 쿼리로 모두 센다. */
+export function countTodos(): Counts {
+  const today = todayLocal();
+  const row = getDb()
     .prepare(
-      `SELECT COUNT(*) AS total,
-              COALESCE(SUM(is_done), 0) AS done
+      `SELECT
+         COUNT(*) AS all_count,
+         SUM(CASE WHEN is_done = 1 THEN 1 ELSE 0 END) AS done,
+         SUM(CASE WHEN is_done = 0
+                   AND due_date IS NOT NULL
+                   AND due_date >= @today
+                   AND due_date <= @weekEnd
+                  THEN 1 ELSE 0 END) AS week,
+         SUM(CASE WHEN is_done = 0
+                   AND (due_date < @today
+                        OR (due_date = @today
+                            AND due_time IS NOT NULL
+                            AND due_time < @nowTime))
+                  THEN 1 ELSE 0 END) AS overdue
        FROM todos`,
     )
-    .get() as { total: number; done: number };
+    .get({
+      today,
+      weekEnd: addDays(today, 7),
+      nowTime: nowTimeLocal(),
+    }) as {
+    all_count: number;
+    done: number;
+    week: number;
+    overdue: number;
+  };
+
+  return {
+    all: row.all_count,
+    week: row.week,
+    overdue: row.overdue,
+    done: row.done,
+  };
 }
 
 export function createTodo(input: {
   title: string;
   memo?: string | null;
+  dueDate?: string | null;
+  dueTime?: string | null;
   category?: CategoryCode;
 }): number {
   const now = nowIso();
   const result = getDb()
     .prepare(
-      `INSERT INTO todos (title, memo, category, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO todos (title, memo, due_date, due_time, category, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.title,
       input.memo ?? null,
+      input.dueDate ?? null,
+      input.dueTime ?? null,
       input.category ?? DEFAULT_CATEGORY,
       now,
       now,
