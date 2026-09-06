@@ -1,0 +1,226 @@
+# Project_Todo — 구축 계획서
+
+로컬에서 동작하는 개인용 할 일(Todo) 관리 앱.
+
+- 작성일: 2026-09-06
+- 상태: 계획 확정 / 구현 미착수
+
+---
+
+## 1. 개요
+
+| 항목 | 내용 |
+|---|---|
+| 무엇 | 내 컴퓨터에서 도는 Todo 앱 |
+| 기본 기능 | 할 일 추가 / 목록 보기 / 완료 표시 / 삭제 |
+| 저장 | 로컬 무료 DB(SQLite 파일) — 껐다 켜도 데이터 유지 |
+| 추가 기능 | 일주일 내 마감 표시, 마감일 하이라이트, 월간 달력 뷰, 카테고리, 검색 |
+| 규칙 | 무료 도구만 사용 / 비밀값은 `.env` / 로그인은 직접 구현하지 않고 검증된 라이브러리 사용 |
+
+---
+
+## 2. 기술 스택 (전부 무료 · 로컬)
+
+| 영역 | 선택 | 이유 |
+|---|---|---|
+| 프레임워크 | Next.js 16 (App Router) + TypeScript | 기존 `Project_Advisory`와 동일 스택 → 학습비용 0 |
+| 스타일 | Tailwind CSS v4 | 위와 동일 |
+| DB | SQLite (`better-sqlite3`) | "내 컴퓨터의 무료 DB" 조건에 정확히 부합. 서버·계정·설치 불필요, `data/todo.db` 파일 하나로 영속 |
+| DB 접근 | 얇은 쿼리 레이어 (순수 SQL) | 이 규모에 ORM은 과함. 마이그레이션은 번호 붙인 `.sql` 파일로 관리 |
+| 데이터 변경 | Server Actions + `revalidatePath` | 별도 API 라우트/클라이언트 fetch 코드 불필요 |
+| 로그인 | v1에서는 미포함 | 내 PC 단독 사용이라 불필요. 추후 필요 시 직접 구현하지 않고 **Auth.js(NextAuth)** 사용 |
+
+**확인된 로컬 환경:** Node v24.20.0 · npm 11.19.0 · git 2.55.0 · Windows 11
+
+**리스크:** `better-sqlite3`는 네이티브 모듈로, Windows에 빌드 도구가 없으면 설치가 실패할 수 있음.
+→ 대체안: Node 24 내장 `node:sqlite` 사용 (별도 설치 불필요). 0단계에서 즉시 판별한다.
+
+---
+
+## 3. 데이터 모델
+
+테이블 하나로 충분하다.
+
+```sql
+CREATE TABLE todos (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  title       TEXT    NOT NULL,
+  memo        TEXT,
+  due_date    TEXT,                          -- 'YYYY-MM-DD', NULL 허용
+  due_time    TEXT,                          -- 'HH:MM' (10분 단위), NULL 허용 = 시간 미지정
+  category    TEXT    NOT NULL DEFAULT 'none',
+  is_done     INTEGER NOT NULL DEFAULT 0,
+  done_at     TEXT,
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL,
+  CHECK (category IN ('none','personal','work','family','etc')),
+  CHECK (due_time IS NULL OR due_time GLOB '[0-2][0-9]:[0-5]0'),   -- 10분 단위 강제
+  CHECK (due_time IS NULL OR due_date IS NOT NULL)                 -- 시간만 있고 날짜 없는 상태 금지
+);
+
+CREATE INDEX idx_todos_due  ON todos(due_date, due_time);
+CREATE INDEX idx_todos_done ON todos(is_done);
+```
+
+### 설계 결정: 날짜와 시간을 분리해 문자열로 저장
+
+`due_date`(필수 아님)와 `due_time`(옵션)을 각각 로컬 기준 문자열로 저장한다.
+UTC/KST 변환으로 날짜가 하루 밀리는 문제가 D-day 계산과 달력 뷰에서 가장 흔한 사고인데,
+로컬 날짜 문자열로 저장하면 원천 차단된다.
+
+**마감 시간은 옵션이다.** 세 가지 상태를 구분한다.
+
+| 상태 | `due_date` | `due_time` | 의미 |
+|---|---|---|---|
+| 마감 없음 | NULL | NULL | 언제든 |
+| 날짜만 | `2026-09-10` | NULL | 그날 하루 안 (= 하루의 끝까지) |
+| 날짜+시간 | `2026-09-10` | `14:30` | 그날 14:30까지 |
+
+### 정렬 규칙
+
+```sql
+ORDER BY
+  due_date IS NULL,   -- 마감 있는 것 먼저
+  due_date,
+  due_time IS NULL,   -- 같은 날 안에서는 시간 지정된 것 먼저
+  due_time,
+  created_at
+```
+
+같은 날짜에서 시간이 없는 항목("그날 안에")은 시간이 지정된 항목보다 뒤에 온다.
+
+### 카테고리
+
+PRD 원안의 이름을 다듬었다 — 길이를 2~3자로 통일해 뱃지 UI에서 잘리지 않게 함.
+
+| 코드값 | 화면 표시 | PRD 원안 | 색 |
+|---|---|---|---|
+| `none` | 미분류 | 카테고리 없음 | 회색 |
+| `personal` | 개인 | 개인용무 | 파랑 |
+| `work` | 업무 | 업무 | 보라 |
+| `family` | 경조사 | 경조사 | 분홍 |
+| `etc` | 기타 | 기타 | 청록 |
+
+정의는 `lib/categories.ts` 한 곳에만 둔다(단일 진실 소스). 나중에 사용자가 카테고리를
+직접 추가하고 싶어지면 별도 `categories` 테이블로 승격한다.
+
+---
+
+## 4. 기능별 구현 방식
+
+### 4.1 기본 CRUD
+추가 / 목록 / 완료 토글 / 삭제.
+삭제는 실수 방지를 위해 **되돌리기 토스트 5초**를 붙인다(유예 후 실제 삭제).
+
+### 4.2 마감 시간 입력 — 10분 단위
+- 입력 UI: `<input type="time" step="600">` (step 단위는 초, 600초 = 10분)
+  → 브라우저 시간 선택기가 10분 간격으로 스텝됨.
+- 다만 사용자가 직접 타이핑하면 `14:37` 같은 값도 넣을 수 있으므로,
+  **Server Action에서 서버 측 검증을 반드시 한 번 더 한다** (분이 10의 배수인지).
+  위 스키마의 `CHECK (due_time GLOB '[0-2][0-9]:[0-5]0')`가 마지막 방어선.
+- 시간 입력란은 날짜를 먼저 넣어야 활성화된다(시간만 있는 마감은 의미가 없음).
+- 표시 형식: `9/10 (목) 14:30`, 시간 미지정 시 `9/10 (목)`
+
+### 4.3 마감일 하이라이트
+완료된 항목은 하이라이트를 해제하고 회색 + 취소선 처리한다.
+
+| 상태 | 표시 | 뱃지 예 |
+|---|---|---|
+| 기한 지남 | 빨강 테두리 | `2일 지남` / `3시간 지남` |
+| 오늘 | 주황 | `오늘 14:30` |
+| D-1 ~ D-3 | 노랑 | `D-2` |
+| D-4 ~ D-7 | 옅은 강조 | `D-5` |
+| 8일 이상 · 마감 없음 | 기본 | — |
+
+**시간 유무에 따른 "지남" 판정 차이:**
+- 시간 미지정: 마감일이 **오늘보다 이전**일 때만 지남 (날짜 단위 비교)
+- 시간 지정: 현재 시각이 마감 시각을 넘었을 때 지남 → `3시간 지남` 처럼 시간 단위로 표시
+
+### 4.4 일주일 내 끝나는 일
+상단 필터 탭: `전체 / 이번 주 / 지남 / 완료`
+"이번 주" 쿼리: `due_date BETWEEN 오늘 AND 오늘+7일 AND is_done = 0` (날짜 기준, 시간 무관)
+
+### 4.5 월간 달력 뷰
+- `?view=calendar&month=2026-09`
+- 7열 그리드에 날짜별 할 일 최대 3개 + `＋N개` 표시
+- 시간이 지정된 항목은 `14:30 회의` 형태로 시간을 앞에 붙이고, 날짜 칸 안에서 시간순 정렬
+- 날짜 클릭 시 그날 목록 패널
+- 라이브러리 없이 직접 구현 (월 그리드 계산은 20줄 수준이라 의존성을 추가할 이유가 없음)
+
+### 4.6 검색
+제목·메모 대상 `LIKE '%검색어%'`. 한글 부분 일치가 정상 동작한다. 이 규모에 FTS5는 과함.
+
+### 4.7 필터 상태는 URL 쿼리 파라미터로
+```
+/?q=회의&category=work&filter=week&view=list
+```
+서버 렌더링을 그대로 활용할 수 있고, 새로고침·북마크에도 상태가 유지된다.
+
+---
+
+## 5. 폴더 구조
+
+```
+Project_Todo/
+├─ Project_Todo.md        # 이 계획서
+├─ .env                   # DATABASE_PATH=./data/todo.db   (git 제외)
+├─ .env.example           # 커밋용 템플릿
+├─ .gitignore             # .env, data/, node_modules
+├─ data/todo.db           # SQLite 파일 (git 제외)
+├─ db/
+│  ├─ migrations/001_init.sql
+│  ├─ client.ts           # 커넥션 싱글턴 (dev 핫리로드 대비)
+│  └─ todos.ts            # list / create / update / toggle / remove / search
+├─ app/
+│  ├─ page.tsx            # 목록 + 달력 (뷰 전환)
+│  ├─ actions.ts          # Server Actions (+ 입력 검증)
+│  └─ layout.tsx
+├─ components/
+│  ├─ TodoForm.tsx  TodoItem.tsx  TodoList.tsx
+│  ├─ FilterBar.tsx  SearchBox.tsx  CategoryBadge.tsx
+│  ├─ DueDateInput.tsx    # 날짜 + 10분 단위 시간(옵션)
+│  └─ CalendarView.tsx
+└─ lib/
+   ├─ categories.ts       # 카테고리 단일 정의
+   └─ date.ts             # D-day 계산, 로컬 날짜/시간 포맷, 10분 단위 검증
+```
+
+### `.env` 규칙 준수
+현재는 실질적인 비밀값이 없지만(로컬 DB 경로뿐), PRD 규칙대로 `DATABASE_PATH`를 `.env`로 분리하고
+`.env`는 `.gitignore`에 넣고 `.env.example`만 커밋한다.
+추후 Auth.js를 붙이면 `AUTH_SECRET`이 같은 자리에 들어간다.
+
+---
+
+## 6. 진행 순서
+
+각 단계마다 실제로 실행해서 확인한 뒤 다음으로 넘어간다.
+
+| 단계 | 내용 | 완료 기준 |
+|---|---|---|
+| 0 | 프로젝트 생성, SQLite 연결, `.env`, 마이그레이션 | 앱이 뜨고 DB 파일이 생성됨 |
+| 1 | CRUD — 추가 / 목록 / 완료 / 삭제 | 서버를 껐다 켜도 데이터가 남음 |
+| 2 | 마감일 + 옵션 시간(10분 단위) + 하이라이트 + 이번 주 필터 | D-day 뱃지와 지남 판정이 정확함 |
+| 3 | 카테고리 + 검색 | 조합 필터가 동작함 |
+| 4 | 월간 달력 뷰 | 월 이동, 날짜별·시간순 표시 |
+| 5 | 마무리 — 빈 상태 안내, 삭제 되돌리기, 샘플 데이터, README | — |
+
+---
+
+## 7. 확정된 전제
+
+1. **마감 시간은 옵션**이며 10분 단위로만 입력한다. 시간 없는 할 일은 "그날 안에"로 취급한다.
+2. **v1에는 로그인이 없다.** 혼자 쓰는 로컬 앱이므로 불필요. 추후 필요해지면 Auth.js를 사용한다.
+3. 시간대 변환은 하지 않는다. 모든 날짜·시간은 로컬(KST) 기준 문자열로 저장한다.
+
+---
+
+## 8. 범위에서 제외한 것 (v1)
+
+아래는 의도적으로 제외했다. 필요해지면 별도 단계로 추가한다.
+
+- 반복 일정 (매주 월요일 등)
+- 알림 / 푸시
+- 하위 작업(서브태스크), 태그
+- 여러 사용자, 클라우드 동기화
+- 첨부파일
